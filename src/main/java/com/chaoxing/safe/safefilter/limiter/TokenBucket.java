@@ -1,0 +1,86 @@
+package com.chaoxing.safe.safefilter.limiter;
+
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+
+public class TokenBucket {
+
+	private int maxCapacity = 100;
+	int avgRate = 10;
+	int interval = 10;
+	TimeUnit tunit = TimeUnit.SECONDS;
+	
+	private ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+	
+	private ArrayBlockingQueue<Byte> tokenQueue;
+	
+	private static final byte A_CHAR = 'a';
+	
+	private ReentrantLock lock = new ReentrantLock(true);
+	
+	public TokenBucket(int maxCapacity,int avgRate,int intervalInSecond){
+		this.maxCapacity = maxCapacity;
+		this.avgRate = avgRate;
+		this.interval = intervalInSecond;
+		tokenQueue = new ArrayBlockingQueue<Byte>(maxCapacity);
+		start();
+	}
+	
+	public boolean getTokens(int needNum) {
+		lock.lock();
+		try {
+			int avaliableToken = tokenQueue.size();
+			if(avaliableToken < needNum) {
+				return false;
+			}
+			int tokenCount = 0;
+			for(int i = 0; i < needNum;i++){
+				Byte poll = tokenQueue.poll();
+				if(poll != null) {
+					tokenCount++;
+				}
+			}
+			return tokenCount == needNum;
+		}finally {
+			lock.unlock();
+		}
+	}
+	
+	private void addTokens(int num) {
+		for(int i = 0; i < num;i++) {
+			tokenQueue.offer(Byte.valueOf(A_CHAR));
+		}
+	}
+	
+	private void start() {
+		addTokens(maxCapacity);
+		executor.scheduleWithFixedDelay(new Runnable() {
+			public void run() {
+				addTokens(avgRate);
+			}
+		}, 0, interval, TimeUnit.SECONDS);
+	}
+	
+	public void stop() {
+		executor.shutdown();
+		tokenQueue.clear();
+		tokenQueue = null;
+	}
+	
+	public static void main(String[] args) throws Exception {
+		TokenBucket bucket = new TokenBucket(100, 2, 1);
+		for(int i = 0;i < 100; i++) {
+			if(bucket.getTokens(5)) {
+				System.out.println("enough");
+			}else {
+				System.out.println("not enough");
+			}
+			TimeUnit.MILLISECONDS.sleep(500);
+		}
+		bucket.stop();
+	}
+	
+}

@@ -1,0 +1,367 @@
+package com.chaoxing.safe.safefilter;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Logger;
+
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
+import javax.servlet.DispatcherType;
+import javax.servlet.Filter;
+import javax.servlet.FilterChain;
+import javax.servlet.FilterConfig;
+import javax.servlet.ServletException;
+import javax.servlet.ServletRequest;
+import javax.servlet.ServletResponse;
+import javax.servlet.annotation.WebFilter;
+import javax.servlet.annotation.WebInitParam;
+import javax.servlet.http.HttpServletRequest;
+
+import org.omg.CORBA.Request;
+
+import com.chaoxing.safe.safefilter.limiter.TokenBucket;
+import com.chaoxing.safe.safefilter.utils.JmxUtil;
+import com.chaoxing.safe.safefilter.utils.StringUtil;
+
+//@WebFilter(urlPatterns = { "/opt/*", "/api/*", "/upload/*" }, dispatcherTypes = { DispatcherType.REQUEST,
+//		DispatcherType.FORWARD, DispatcherType.INCLUDE }, initParams = {
+//				@WebInitParam(name = "ipConfFile", value = "ipconfig.txt"),
+//				@WebInitParam(name = "maxCapacity", value = "10000"),
+//				@WebInitParam(name = "excludeUrls", value = "*.js,*.css") })
+public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
+
+	Logger logger = Logger.getLogger("IPFrequencyFilter");
+
+	private ConcurrentHashMap<String, TokenBucket> cache;
+
+	ReentrantLock lock;
+
+	private int maxCapacity = 100;
+	private int avgRate = 100;
+	private int intervalInSecond = 1;
+	int timeoutInSec = 60;
+//	SortedSet<SortedEntry> lastAcceeTimeSet = Collections.synchronizedSortedSet(new TreeSet<SortedEntry>());
+//	SortedSet<AccessCountEntry> accessCountSet = Collections.synchronizedSortedSet(new TreeSet<AccessCountEntry>());
+	ConcurrentHashMap<String, AccessInfo> accessInfoMap = new ConcurrentHashMap<String, AccessInfo>();
+	
+	private Set<String> deniedIps = new HashSet<String>();
+	private Set<String> unlimitIps = new HashSet<String>();
+	private String contextName = "";
+	private Set<String> excludeUrls = new HashSet<String>();
+	private boolean enabled = true;
+	
+	private List<AccessInfo> topAccessInfo = new ArrayList<AccessInfo>();
+
+	@SuppressWarnings("unchecked")
+	ThreadPoolExecutor executor = new ThreadPoolExecutor(1, 1, 5, TimeUnit.SECONDS, new ArrayBlockingQueue(100),
+			new ThreadFactory() {
+
+				public Thread newThread(Runnable r) {
+					Thread t = new Thread(r);
+					t.setName("IPFrequencyFilter-clear-thread");
+					return t;
+				}
+			}, new ThreadPoolExecutor.DiscardPolicy());
+
+	public void init(FilterConfig conf) throws ServletException {
+		cache = new ConcurrentHashMap<String, TokenBucket>();
+		lock = new ReentrantLock();
+		String maxCapacityStr = conf.getInitParameter("maxCapacity");
+		String avgRateStr = conf.getInitParameter("avgRate");
+		String intervalStr = conf.getInitParameter("intervalInSec");
+		String ipConfFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
+		if (ipConfFile != null) {
+			loadIpConfig(ipConfFile);
+		}
+		String excludeUrlsParam = StringUtil.getStringOrNull(conf.getInitParameter("excludeUrls"));
+		if (excludeUrlsParam != null) {
+			String[] tmp = excludeUrlsParam.split(",");
+			for (String url : tmp) {
+				excludeUrls.add(url);
+			}
+		}
+		maxCapacity = StringUtil.parseInt(maxCapacityStr, 10000);
+		avgRate = StringUtil.parseInt(avgRateStr, 100);
+		intervalInSecond = StringUtil.parseInt(intervalStr, 1);
+//		topAccessInfo.add(new AccessInfo("1.1", 111));
+		startClearThread();
+
+	}
+
+	public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+			throws IOException, ServletException {
+		if (contextName == "") {
+			contextName = request.getServletContext().getServletContextName();
+			JmxUtil.registMBean(this, "IPFrequencyFilter-" + contextName);
+		}
+		if(!enabled){
+			chain.doFilter(request, response);
+			return;
+		}
+		HttpServletRequest req = (HttpServletRequest) request;
+		if (isExcludedUrl(req.getServletPath())) {
+			logger.info("unhandle url," + req.getServletPath());
+			chain.doFilter(request, response);
+			return;
+		}
+		String ip = getRemoteIp((HttpServletRequest) request);
+		if (deniedIps.contains(ip)) {
+			response.getWriter().write("ip " + ip + " is denied");
+			logger.info("deny ip:" + ip);
+			return;
+		}
+		if (unlimitIps.contains(ip)) {
+			logger.info("unlimter ip:" + ip);
+			chain.doFilter(request, response);
+			return;
+		}
+		long now = System.currentTimeMillis();
+		updateLastAccessTime(ip, now);
+		if (getIpTokens(ip, 1)) {
+//			System.out.println("取得令牌成功");
+			chain.doFilter(request, response);
+		} else {
+			response.getWriter().write("ip " + ip + " access too many");
+		}
+	}
+
+	private boolean isExcludedUrl(String path) {
+		for (String pat : excludeUrls) {
+			if (pat.endsWith("*")) {
+				pat = pat.replaceAll("\\*", "");
+				if (path.indexOf(pat) > -1) {
+					return true;
+				}
+			} else if (pat.startsWith("*")) {
+				String suffix = pat.substring(1);
+				if (path.endsWith(suffix)) {
+					return true;
+				}
+			} else {
+				if (pat.equals(path)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	public void destroy() {
+		executor.shutdown();
+		for (Iterator<String> it = cache.keySet().iterator(); it.hasNext();) {
+			String ip = it.next();
+			removeBucket(ip);
+		}
+		cache.clear();
+		cache = null;
+//		lastAcceeTimeSet.clear();
+	}
+
+	void loadIpConfig(String filename) {
+		BufferedReader br = null;
+		try {
+			br = new BufferedReader(
+					new InputStreamReader(this.getClass().getClassLoader().getResourceAsStream(filename), "utf-8"));
+			String line = "";
+			while ((line = br.readLine()) != null) {
+				line = line.trim();
+				// System.out.println(line);
+				if (line == "")
+					continue;
+				String[] arr = line.split(":");
+				if ("unlimit".equals(arr[0])) {
+					unlimitIps.add(arr[1]);
+				} else if ("denied".equals(arr[0])) {
+					deniedIps.add(arr[1]);
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			if (br != null) {
+				try {
+					br.close();
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+	}
+
+	void updateLastAccessTime(final String ip, final long lastTime) {
+		executor.submit(new Runnable() {
+
+			public void run() {
+				if(!accessInfoMap.contains(ip)){
+					AccessInfo info = new AccessInfo(ip,lastTime);
+					accessInfoMap.put(ip, info);
+				} else {
+					AccessInfo info = accessInfoMap.get(ip);
+					info.setLastAccessTime(lastTime);
+					info.addAccess(1);
+				}
+			}
+		});
+	}
+
+	void startClearThread() {
+		new Thread(new Runnable() {
+
+			public void run() {
+				while (true) {
+					if(!enabled) {
+						try {
+							TimeUnit.SECONDS.sleep(5);
+							continue;
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+						}
+					}
+					logger.info("clear timeout bucket...");
+					long now = System.currentTimeMillis();
+					try {						
+						for(Iterator<String> it = accessInfoMap.keySet().iterator();it.hasNext();) {
+							String key = it.next();
+							AccessInfo info = accessInfoMap.get(key);
+							if(now - info.getLastAccessTime() > timeoutInSec * 1000) {
+								removeBucket(key);
+								accessInfoMap.remove(key);
+							}
+						}
+						logger.info("current IP bucket num = " + cache.size());
+						TimeUnit.SECONDS.sleep(5);
+					} catch (InterruptedException e) {
+					}
+				}
+			}
+		}).start();
+	}
+
+	boolean getIpTokens(String ip, int num) {
+		try {
+			lock.lock();
+			TokenBucket bucket = cache.get(ip);
+			if (bucket == null) {
+				bucket = new TokenBucket(maxCapacity, avgRate, intervalInSecond);
+				cache.put(ip, bucket);
+			}
+			return bucket.getTokens(num);
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	void removeBucket(String ip) {
+		TokenBucket bucket = null;
+		try {
+			lock.lock();
+			bucket = cache.remove(ip);
+		} finally {
+			lock.unlock();
+		}
+		if (bucket != null) {
+			bucket.stop();
+			bucket = null;
+		}
+	}
+
+	String getRemoteIp(HttpServletRequest request) {
+		String ip = request.getHeader("X-Forwarded-For");
+		if (ip != null && ip.trim().length() > 0 && !"unKnown".equalsIgnoreCase(ip)) {
+			// 多次反向代理后会有多个ip值，第一个ip才是真实ip
+			int index = ip.indexOf(",");
+			if (index != -1) {
+				return ip.substring(0, index);
+			} else {
+				return ip;
+			}
+		}
+		ip = request.getHeader("X-Real-IP");
+		if (ip != null && ip.trim().length() > 0 && !"unKnown".equalsIgnoreCase(ip)) {
+			return ip;
+		}
+		return request.getRemoteAddr();
+	}
+	
+	public int getMaxCapacityPerIp() {
+		return maxCapacity;
+	}
+
+	public int getAvgRatePerIp() {
+		return avgRate;
+	}
+
+	public int getInterval() {
+		return intervalInSecond;
+	}
+
+	public Set<String> getDeniedIps() {
+		return deniedIps;
+	}
+
+	public Set<String> getUnlimitIps() {
+		return unlimitIps;
+	}
+
+	public long getOnlineIpCount() {
+		return cache.size();
+	}
+
+	public Set<String> getExcludeUrls() {
+		return excludeUrls;
+	}
+	
+	public List<AccessInfo> getTopAccessInfo() {
+//		int need = 100;
+//		TreeSet<AccessInfo> infos = new TreeSet<AccessInfo>();
+//		int count = 0;
+//		for(Entry<String, AccessInfo> e : accessInfoMap.entrySet()){
+//			AccessInfo info = e.getValue();
+//			info.setIp(e.getKey());
+//			infos.add(info);
+//			count ++;
+//			if(count == need){
+//				break;
+//			}
+//		}
+//		List<AccessInfo> ret = new ArrayList<AccessInfo>();
+//		for(AccessInfo info : infos ) {
+//			ret.add(info);
+//		}
+//		return ret;
+		return topAccessInfo;
+	}
+	
+	public void enableFilter(boolean enabled) {
+		this.enabled = enabled;
+	}
+	
+	public boolean getEnabled() {
+		return enabled;
+	}
+	
+	
+	public static void main(String[] args) throws Exception {
+
+	}
+}
