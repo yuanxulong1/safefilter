@@ -50,7 +50,7 @@ import com.chaoxing.safe.safefilter.utils.StringUtil;
 //				@WebInitParam(name = "ipConfFile", value = "ipconfig.txt"),
 //				@WebInitParam(name = "maxCapacity", value = "10000"),
 //				@WebInitParam(name = "excludeUrls", value = "*.js,*.css") })
-public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
+public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 
 	private static Log logger = LogFactory.getLog(IPFrequencyFilter.class);
 
@@ -103,6 +103,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
 		maxCapacity = StringUtil.parseInt(maxCapacityStr, 10000);
 		avgRate = StringUtil.parseInt(avgRateStr, 100);
 		intervalInSecond = StringUtil.parseInt(intervalStr, 1);
+//		topAccessInfo.add(new AccessInfo("127.0.0.1", 1L));
 		startClearThread();
 
 	}
@@ -147,6 +148,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
 //			System.out.println("取得令牌成功");
 			chain.doFilter(request, response);
 		} else {
+			logger.info("ip " + ip + "访问过于频繁，阻止访问");
 			response.getWriter().write("ip " + ip + " access too many");
 		}
 	}
@@ -216,7 +218,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
 		executor.submit(new Runnable() {
 
 			public void run() {
-				if(!accessInfoMap.contains(ip)){
+				if(!accessInfoMap.keySet().contains(ip)){
 					AccessInfo info = new AccessInfo(ip,lastTime);
 					accessInfoMap.put(ip, info);
 				} else {
@@ -340,23 +342,23 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
 	}
 	
 	public List<AccessInfo> getTopAccessInfo() {
-//		int need = 100;
-//		TreeSet<AccessInfo> infos = new TreeSet<AccessInfo>();
-//		int count = 0;
-//		for(Entry<String, AccessInfo> e : accessInfoMap.entrySet()){
-//			AccessInfo info = e.getValue();
-//			info.setIp(e.getKey());
-//			infos.add(info);
-//			count ++;
-//			if(count == need){
-//				break;
-//			}
-//		}
-//		List<AccessInfo> ret = new ArrayList<AccessInfo>();
-//		for(AccessInfo info : infos ) {
-//			ret.add(info);
-//		}
-//		return ret;
+		topAccessInfo.clear();
+		int need = 50;
+		TreeSet<AccessInfo> infos = new TreeSet<AccessInfo>();
+		int count = 0;
+		for(Entry<String, AccessInfo> e : accessInfoMap.entrySet()){
+			AccessInfo info = e.getValue();
+			info.setIp(e.getKey());
+			infos.add(info);
+			count ++;
+			if(count == need){
+				break;
+			}
+		}
+		for(AccessInfo info : infos ) {
+			topAccessInfo.add(info);
+			System.out.println(info.getAccessTotal());
+		}
 		return topAccessInfo;
 	}
 	

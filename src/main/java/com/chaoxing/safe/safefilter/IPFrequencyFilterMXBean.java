@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Set;
 
 
-public interface IPFrequencyFilterMBean {
+public interface IPFrequencyFilterMXBean {
 	public int getMaxCapacityPerIp();
 
 	public int getAvgRatePerIp();
@@ -19,7 +19,7 @@ public interface IPFrequencyFilterMBean {
 	
 	public Set<String> getExcludeUrls();
 	
-//	public List<AccessInfo> getTopAccessInfo();
+	public List<AccessInfo> getTopAccessInfo();
 	
 	public void enableFilter(boolean enabled);
 	

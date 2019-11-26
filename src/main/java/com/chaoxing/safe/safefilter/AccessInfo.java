@@ -51,4 +51,11 @@ public class AccessInfo implements Comparable<AccessInfo>{
 			return -1;
 		}
 	}
+	
+	public static void main(String[] args) {
+		AccessInfo info = new AccessInfo("1", 1L);
+		info.addAccess(1);
+		info.addAccess(1);
+		System.out.println(info.getAccessTotal());
+	}
 }
