@@ -1,6 +1,5 @@
 package com.chaoxing.safe.safefilter;
 
-import java.util.Date;
 import java.util.concurrent.atomic.AtomicLong;
 
 
@@ -8,9 +7,6 @@ public class AccessInfo implements Comparable<AccessInfo>{
 	private String ip;
 	private long lastAccessTime;
 	private AtomicLong accessTotal;
-	private long firstAccessTime;
-	private Date lastAccessDateTime;
-	private Date firstAccessDateTime;
 	
 	public String getIp() {
 		return ip;
@@ -22,10 +18,8 @@ public class AccessInfo implements Comparable<AccessInfo>{
 
 	public AccessInfo(String ip,long lastAccessTime){
 		this.lastAccessTime = lastAccessTime;
-		this.firstAccessTime = lastAccessTime;
 		this.ip = ip;
 		accessTotal = new AtomicLong(0);
-		this.firstAccessDateTime = new Date(firstAccessTime);
 	}
 
 	public long getLastAccessTime() {
@@ -34,7 +28,6 @@ public class AccessInfo implements Comparable<AccessInfo>{
 
 	public void setLastAccessTime(long lastAccessTime) {
 		this.lastAccessTime = lastAccessTime;
-		this.lastAccessDateTime = new Date(lastAccessTime);
 	}
 
 	public long getAccessTotal() {
@@ -43,16 +36,6 @@ public class AccessInfo implements Comparable<AccessInfo>{
 	
 	public void addAccess(long count) {
 		accessTotal.getAndAdd(count);
-	}
-
-	
-	public long getFirstAccessTime() {
-		return firstAccessTime;
-	}
-
-	public void setFirstAccessTime(long firstAccessTime) {
-		this.firstAccessTime = firstAccessTime;
-		this.firstAccessDateTime = new Date(firstAccessTime);
 	}
 
 	public int compareTo(AccessInfo o) {
@@ -69,14 +52,6 @@ public class AccessInfo implements Comparable<AccessInfo>{
 		}
 	}
 	
-	public Date getLastAccessDateTime() {
-		return lastAccessDateTime;
-	}
-
-	public Date getFirstAccessDateTime() {
-		return firstAccessDateTime;
-	}
-
 	public static void main(String[] args) {
 		AccessInfo info = new AccessInfo("1", 1L);
 		info.addAccess(1);

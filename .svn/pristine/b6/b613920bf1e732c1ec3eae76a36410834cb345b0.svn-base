@@ -23,8 +23,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
@@ -39,8 +37,6 @@ import javax.servlet.annotation.WebFilter;
 import javax.servlet.annotation.WebInitParam;
 import javax.servlet.http.HttpServletRequest;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.omg.CORBA.Request;
 
 import com.chaoxing.safe.safefilter.limiter.TokenBucket;
@@ -52,9 +48,9 @@ import com.chaoxing.safe.safefilter.utils.StringUtil;
 //				@WebInitParam(name = "ipConfFile", value = "ipconfig.txt"),
 //				@WebInitParam(name = "maxCapacity", value = "10000"),
 //				@WebInitParam(name = "excludeUrls", value = "*.js,*.css") })
-public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
+public class IPFrequencyFilter implements Filter, IPFrequencyFilterMBean {
 
-	private static Log logger = LogFactory.getLog(IPFrequencyFilter.class);
+	Logger logger = Logger.getLogger("IPFrequencyFilter");
 
 	private ConcurrentHashMap<String, TokenBucket> cache;
 
@@ -64,17 +60,15 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 	private int avgRate = 100;
 	private int intervalInSecond = 1;
 	int timeoutInSec = 60;
+//	SortedSet<SortedEntry> lastAcceeTimeSet = Collections.synchronizedSortedSet(new TreeSet<SortedEntry>());
+//	SortedSet<AccessCountEntry> accessCountSet = Collections.synchronizedSortedSet(new TreeSet<AccessCountEntry>());
 	ConcurrentHashMap<String, AccessInfo> accessInfoMap = new ConcurrentHashMap<String, AccessInfo>();
-	
-	//定义每一个IP的访问频率，key代表IP，value代表访问频率，没有定义的按照默认的走
-	ConcurrentHashMap<String, Integer> customIps = new ConcurrentHashMap<>();
 	
 	private Set<String> deniedIps = new HashSet<String>();
 	private Set<String> unlimitIps = new HashSet<String>();
 	private String contextName = "";
 	private Set<String> excludeUrls = new HashSet<String>();
 	private boolean enabled = true;
-	private String ipConfigFile;
 	
 	private List<AccessInfo> topAccessInfo = new ArrayList<AccessInfo>();
 
@@ -95,9 +89,9 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		String maxCapacityStr = conf.getInitParameter("maxCapacity");
 		String avgRateStr = conf.getInitParameter("avgRate");
 		String intervalStr = conf.getInitParameter("intervalInSec");
-		ipConfigFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
-		if (ipConfigFile != null) {
-			loadIpConfig(ipConfigFile);
+		String ipConfFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
+		if (ipConfFile != null) {
+			loadIpConfig(ipConfFile);
 		}
 		String excludeUrlsParam = StringUtil.getStringOrNull(conf.getInitParameter("excludeUrls"));
 		if (excludeUrlsParam != null) {
@@ -109,7 +103,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		maxCapacity = StringUtil.parseInt(maxCapacityStr, 10000);
 		avgRate = StringUtil.parseInt(avgRateStr, 100);
 		intervalInSecond = StringUtil.parseInt(intervalStr, 1);
-//		topAccessInfo.add(new AccessInfo("127.0.0.1", 1L));
+//		topAccessInfo.add(new AccessInfo("1.1", 111));
 		startClearThread();
 
 	}
@@ -126,25 +120,18 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		}
 		HttpServletRequest req = (HttpServletRequest) request;
 		if (isExcludedUrl(req.getServletPath())) {
-			if(logger.isInfoEnabled()) {
-				logger.info("unhandle url," + req.getServletPath());
-			}
-			
+			logger.info("unhandle url," + req.getServletPath());
 			chain.doFilter(request, response);
 			return;
 		}
 		String ip = getRemoteIp((HttpServletRequest) request);
 		if (deniedIps.contains(ip)) {
 			response.getWriter().write("ip " + ip + " is denied");
-			if(logger.isInfoEnabled()) {
-				logger.info("deny ip:" + ip);
-			}
+			logger.info("deny ip:" + ip);
 			return;
 		}
 		if (unlimitIps.contains(ip)) {
-			if(logger.isInfoEnabled()) {
-				logger.info("unlimter ip:" + ip);
-			}
+			logger.info("unlimter ip:" + ip);
 			chain.doFilter(request, response);
 			return;
 		}
@@ -154,7 +141,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 //			System.out.println("取得令牌成功");
 			chain.doFilter(request, response);
 		} else {
-			logger.info("ip " + ip + " 访问过于频繁，阻止访问");
 			response.getWriter().write("ip " + ip + " access too many");
 		}
 	}
@@ -188,6 +174,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		}
 		cache.clear();
 		cache = null;
+//		lastAcceeTimeSet.clear();
 	}
 
 	void loadIpConfig(String filename) {
@@ -196,11 +183,9 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 			br = new BufferedReader(
 					new InputStreamReader(this.getClass().getClassLoader().getResourceAsStream(filename), "utf-8"));
 			String line = "";
-			unlimitIps.clear();
-			deniedIps.clear();
-			customIps.clear();
 			while ((line = br.readLine()) != null) {
 				line = line.trim();
+				// System.out.println(line);
 				if (line == "")
 					continue;
 				String[] arr = line.split(":");
@@ -208,9 +193,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 					unlimitIps.add(arr[1]);
 				} else if ("denied".equals(arr[0])) {
 					deniedIps.add(arr[1]);
-				} else if(StringUtil.isIntOrLong(arr[0])){
-					int allowed = Integer.parseInt(arr[0]);
-					customIps.put(arr[1], allowed);
 				}
 			}
 		} catch (Exception e) {
@@ -230,7 +212,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		executor.submit(new Runnable() {
 
 			public void run() {
-				if(!accessInfoMap.keySet().contains(ip)){
+				if(!accessInfoMap.contains(ip)){
 					AccessInfo info = new AccessInfo(ip,lastTime);
 					accessInfoMap.put(ip, info);
 				} else {
@@ -255,9 +237,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 							e.printStackTrace();
 						}
 					}
-					if(logger.isInfoEnabled()) {
-						logger.info("clear timeout bucket...");
-					}
+					logger.info("clear timeout bucket...");
 					long now = System.currentTimeMillis();
 					try {						
 						for(Iterator<String> it = accessInfoMap.keySet().iterator();it.hasNext();) {
@@ -268,9 +248,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 								accessInfoMap.remove(key);
 							}
 						}
-						if(logger.isInfoEnabled()) {
-							logger.info("current IP bucket num = " + cache.size());
-						}
+						logger.info("current IP bucket num = " + cache.size());
 						TimeUnit.SECONDS.sleep(5);
 					} catch (InterruptedException e) {
 					}
@@ -284,11 +262,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 			lock.lock();
 			TokenBucket bucket = cache.get(ip);
 			if (bucket == null) {
-				if(!customIps.containsKey(ip)) {
-					bucket = new TokenBucket(maxCapacity, customIps.get(ip), intervalInSecond);
-				} else {
-					bucket = new TokenBucket(maxCapacity, avgRate, intervalInSecond);
-				}
+				bucket = new TokenBucket(maxCapacity, avgRate, intervalInSecond);
 				cache.put(ip, bucket);
 			}
 			return bucket.getTokens(num);
@@ -358,30 +332,24 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 	}
 	
 	public List<AccessInfo> getTopAccessInfo() {
-		topAccessInfo.clear();
-		int need = 50;
-		TreeSet<AccessInfo> infos = new TreeSet<AccessInfo>();
-		int count = 0;
-		for(Entry<String, AccessInfo> e : accessInfoMap.entrySet()){
-			AccessInfo info = e.getValue();
-			info.setIp(e.getKey());
-			infos.add(info);
-			count ++;
-			if(count == need){
-				break;
-			}
-		}
-		for(AccessInfo info : infos ) {
-//			AccessInfo other = new AccessInfo(info.getIp(), info.getLastAccessTime());
-//			other.setFirstAccessTime(info.getFirstAccessTime());
-//			other.addAccess(info.getAccessTotal());
-			topAccessInfo.add(info);
-		}
+//		int need = 100;
+//		TreeSet<AccessInfo> infos = new TreeSet<AccessInfo>();
+//		int count = 0;
+//		for(Entry<String, AccessInfo> e : accessInfoMap.entrySet()){
+//			AccessInfo info = e.getValue();
+//			info.setIp(e.getKey());
+//			infos.add(info);
+//			count ++;
+//			if(count == need){
+//				break;
+//			}
+//		}
+//		List<AccessInfo> ret = new ArrayList<AccessInfo>();
+//		for(AccessInfo info : infos ) {
+//			ret.add(info);
+//		}
+//		return ret;
 		return topAccessInfo;
-	}
-	
-	public void clearTopAccessInfo(){
-		topAccessInfo.clear();
 	}
 	
 	public void enableFilter(boolean enabled) {
@@ -392,12 +360,8 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		return enabled;
 	}
 	
-	public void reloadIpConfigFile() {
-		loadIpConfig(ipConfigFile);
-	}
-	
 	
 	public static void main(String[] args) throws Exception {
-//		Stream.of("a","b").collect(Collectors)
+
 	}
 }

@@ -27,6 +27,4 @@ public interface IPFrequencyFilterMXBean {
 	
 	public boolean getEnabled();
 	
-	public void reloadIpConfigFile();
-	
 }

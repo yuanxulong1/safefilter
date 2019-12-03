@@ -66,7 +66,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 	int timeoutInSec = 60;
 	ConcurrentHashMap<String, AccessInfo> accessInfoMap = new ConcurrentHashMap<String, AccessInfo>();
 	
-	//定义每一个IP的访问频率，key代表IP，value代表访问频率，没有定义的按照默认的走
 	ConcurrentHashMap<String, Integer> customIps = new ConcurrentHashMap<>();
 	
 	private Set<String> deniedIps = new HashSet<String>();
@@ -74,7 +73,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 	private String contextName = "";
 	private Set<String> excludeUrls = new HashSet<String>();
 	private boolean enabled = true;
-	private String ipConfigFile;
 	
 	private List<AccessInfo> topAccessInfo = new ArrayList<AccessInfo>();
 
@@ -95,9 +93,9 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		String maxCapacityStr = conf.getInitParameter("maxCapacity");
 		String avgRateStr = conf.getInitParameter("avgRate");
 		String intervalStr = conf.getInitParameter("intervalInSec");
-		ipConfigFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
-		if (ipConfigFile != null) {
-			loadIpConfig(ipConfigFile);
+		String ipConfFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
+		if (ipConfFile != null) {
+			loadIpConfig(ipConfFile);
 		}
 		String excludeUrlsParam = StringUtil.getStringOrNull(conf.getInitParameter("excludeUrls"));
 		if (excludeUrlsParam != null) {
@@ -196,9 +194,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 			br = new BufferedReader(
 					new InputStreamReader(this.getClass().getClassLoader().getResourceAsStream(filename), "utf-8"));
 			String line = "";
-			unlimitIps.clear();
-			deniedIps.clear();
-			customIps.clear();
 			while ((line = br.readLine()) != null) {
 				line = line.trim();
 				if (line == "")
@@ -390,10 +385,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 	
 	public boolean getEnabled() {
 		return enabled;
-	}
-	
-	public void reloadIpConfigFile() {
-		loadIpConfig(ipConfigFile);
 	}
 	
 	

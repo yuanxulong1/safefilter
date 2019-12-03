@@ -23,8 +23,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
@@ -66,15 +64,11 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 	int timeoutInSec = 60;
 	ConcurrentHashMap<String, AccessInfo> accessInfoMap = new ConcurrentHashMap<String, AccessInfo>();
 	
-	//定义每一个IP的访问频率，key代表IP，value代表访问频率，没有定义的按照默认的走
-	ConcurrentHashMap<String, Integer> customIps = new ConcurrentHashMap<>();
-	
 	private Set<String> deniedIps = new HashSet<String>();
 	private Set<String> unlimitIps = new HashSet<String>();
 	private String contextName = "";
 	private Set<String> excludeUrls = new HashSet<String>();
 	private boolean enabled = true;
-	private String ipConfigFile;
 	
 	private List<AccessInfo> topAccessInfo = new ArrayList<AccessInfo>();
 
@@ -95,9 +89,9 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		String maxCapacityStr = conf.getInitParameter("maxCapacity");
 		String avgRateStr = conf.getInitParameter("avgRate");
 		String intervalStr = conf.getInitParameter("intervalInSec");
-		ipConfigFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
-		if (ipConfigFile != null) {
-			loadIpConfig(ipConfigFile);
+		String ipConfFile = StringUtil.getStringOrNull(conf.getInitParameter("ipConfFile"));
+		if (ipConfFile != null) {
+			loadIpConfig(ipConfFile);
 		}
 		String excludeUrlsParam = StringUtil.getStringOrNull(conf.getInitParameter("excludeUrls"));
 		if (excludeUrlsParam != null) {
@@ -154,7 +148,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 //			System.out.println("取得令牌成功");
 			chain.doFilter(request, response);
 		} else {
-			logger.info("ip " + ip + " 访问过于频繁，阻止访问");
+			logger.info("ip " + ip + "访问过于频繁，阻止访问");
 			response.getWriter().write("ip " + ip + " access too many");
 		}
 	}
@@ -196,9 +190,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 			br = new BufferedReader(
 					new InputStreamReader(this.getClass().getClassLoader().getResourceAsStream(filename), "utf-8"));
 			String line = "";
-			unlimitIps.clear();
-			deniedIps.clear();
-			customIps.clear();
 			while ((line = br.readLine()) != null) {
 				line = line.trim();
 				if (line == "")
@@ -208,9 +199,6 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 					unlimitIps.add(arr[1]);
 				} else if ("denied".equals(arr[0])) {
 					deniedIps.add(arr[1]);
-				} else if(StringUtil.isIntOrLong(arr[0])){
-					int allowed = Integer.parseInt(arr[0]);
-					customIps.put(arr[1], allowed);
 				}
 			}
 		} catch (Exception e) {
@@ -284,11 +272,7 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 			lock.lock();
 			TokenBucket bucket = cache.get(ip);
 			if (bucket == null) {
-				if(!customIps.containsKey(ip)) {
-					bucket = new TokenBucket(maxCapacity, customIps.get(ip), intervalInSecond);
-				} else {
-					bucket = new TokenBucket(maxCapacity, avgRate, intervalInSecond);
-				}
+				bucket = new TokenBucket(maxCapacity, avgRate, intervalInSecond);
 				cache.put(ip, bucket);
 			}
 			return bucket.getTokens(num);
@@ -392,12 +376,8 @@ public class IPFrequencyFilter implements Filter, IPFrequencyFilterMXBean {
 		return enabled;
 	}
 	
-	public void reloadIpConfigFile() {
-		loadIpConfig(ipConfigFile);
-	}
-	
 	
 	public static void main(String[] args) throws Exception {
-//		Stream.of("a","b").collect(Collectors)
+
 	}
 }

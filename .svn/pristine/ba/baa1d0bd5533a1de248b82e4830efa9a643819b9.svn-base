@@ -21,12 +21,8 @@ public interface IPFrequencyFilterMXBean {
 	
 	public List<AccessInfo> getTopAccessInfo();
 	
-	public void clearTopAccessInfo();
-	
 	public void enableFilter(boolean enabled);
 	
 	public boolean getEnabled();
-	
-	public void reloadIpConfigFile();
 	
 }
